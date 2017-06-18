@@ -6,8 +6,6 @@ ERLANG_BIN       = $(shell dirname $(shell which erl))
 OVERLAY_VARS    ?=
 REBAR ?= $(BASE_DIR)/rebar3
 
-
-
 $(if $(ERLANG_BIN),,$(warning "Warning: No Erlang found in your path, this will probably not work"))
 
 .PHONY: rel docs
@@ -15,13 +13,13 @@ $(if $(ERLANG_BIN),,$(warning "Warning: No Erlang found in your path, this will 
 all: compile
 
 compile:
-	$(REBAR) compile
+	$(REBAR) $(PROFILE) compile
 
 deps:
-	$(REBAR) deps
+	$(REBAR) $(PROFILE) deps
 
 install_deps:
-	$(REBAR) install_deps
+	$(REBAR) $(PROFILE) install_deps
 
 clean: testclean
 	@rm -rf ebin
@@ -29,6 +27,8 @@ clean: testclean
 distclean: clean relclean ballclean
 	@rm -rf _build
 
+rpi32: PROFILE = as rpi32
+rpi32: rel
 
 ##
 ## Test targets
@@ -53,11 +53,11 @@ test: compile testclean
 ##
 rel:
 ifeq ($(OVERLAY_VARS),)
-	$(REBAR) release --overlay_vars vars.config
+	$(REBAR) $(PROFILE) release --overlay_vars vars.config
 else
-	cat $(OVERLAY_VARS) > vars_pkg.config
-	cat vars.config >> vars_pkg.config
-	$(REBAR) release --overlay_vars vars_pkg.config
+	cat vars.config > vars_pkg.config
+	cat $(OVERLAY_VARS) >> vars_pkg.config
+	$(REBAR) $(PROFILE) release --overlay_vars vars_pkg.config
 	cp _build/default/rel/vernemq/bin/start_clean.boot _build/default/rel/vernemq/releases/$(MAJOR_VERSION)/start_clean.boot
 endif
 
@@ -71,7 +71,6 @@ relclean:
 ##
 docs: compile
 	(cd docs && make clean && make html)
-	
 
 ##
 ## Developer targets
@@ -81,7 +80,6 @@ dev% :
 	mkdir -p dev
 	./gen_dev $@ vars/dev_vars.config.src vars/$@_vars.config
 	(./rebar3 as $@ release --overlay_vars vars/$@_vars.config)
-
 
 APPS = kernel stdlib sasl erts ssl tools os_mon runtime_tools crypto inets \
 	xmerl webtool snmp public_key mnesia eunit syntax_tools compiler
@@ -243,4 +241,27 @@ export PKG_VERSION PKG_ID PKG_BUILD BASE_DIR ERLANG_BIN REBAR OVERLAY_VARS RELEA
 pkg-devrel: devrel
 	tar -czf $(PKG_ID)-devrel.tar.gz dev/
 
+VERNEROOT := ${CURDIR}
+prep_dirty_package:
+	rm -rf /tmp/vernemq-dirty-package
+	rm -rf ./distdir/$(PKG_ID)
+	rsync -a . /tmp/vernemq-dirty-package --exclude distdir
+	mkdir -p distdir
+	cp -aR /tmp/vernemq-dirty-package distdir/$(PKG_ID)
+	if [ -d "distdir/$(PKG_ID)/_checkouts" ]; then \
+	  for co in distdir/$(PKG_ID)/_checkouts/* ; do \
+	     cp -R $${co} distdir/$(PKG_ID)/_build/default/lib/; \
+	  done \
+	fi
+	for dep in distdir/$(PKG_ID)/_build/default/lib/*; do \
+	    mkdir -p $${dep}/priv; \
+	    cd $${dep}; \
+	    printf "`git describe --long --tags 2>/dev/null || git rev-parse HEAD`" > priv/vsn.git; \
+	    cd $(VERNEROOT); \
+	done
+	tar -C distdir -czf distdir/$(PKG_ID).tar.gz $(PKG_ID)
 
+dirty_package: PKG_ID = $(REPO)-$(shell git describe --tags)-dirty
+dirty_package: compile prep_dirty_package
+	ln -s distdir package
+	${MAKE} -C package -f $(PKG_ID)/_build/default/lib/node_package/Makefile  DEPS_DIR=_build/default/lib
